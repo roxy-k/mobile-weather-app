@@ -92,70 +92,83 @@ useEffect(() => {
 
 
   // fetch weather when coords/units change
-  useEffect(() => {
-    (async () => {
-      if (!coords) return;
-      try {
-        setLoading(true);
-        setError(null);
+useEffect(() => {
+  (async () => {
+    if (!coords) return;
+    try {
+      setLoading(true);
+      setError(null);
 
-        const data = await fetchWeather(coords.lat, coords.lon, units);
-        setWeather(data);
+      // ── 1) Текущее состояние
+      const data = await fetchWeather(coords.lat, coords.lon, units);
+      setWeather(data);
+      const label = String(data?.locationName || data?.name || "");
+      setLocationName(label);
 
-        const label = String(data?.locationName || data?.name || "");
-        setLocationName(label);
+      // ── 2) Почасовой прогноз (3-часовые слоты на 5 суток)
+      const raw = await fetchForecast3h(coords.lat, coords.lon, units);
+      const hourlyItems: HourlyItem[] = (raw ?? []).map(
+        (h: {
+          dt: any;
+          dt_txt?: string;
+          main: { temp: any };
+          weather: any;
+          description?: any;
+        }) => {
+          const dt =
+            typeof h?.dt === "number"
+              ? h.dt
+              : Math.floor(Date.parse(h?.dt_txt ?? "") / 1000) ||
+                Math.floor(Date.now() / 1000);
 
-        const raw = await fetchForecast3h(coords.lat, coords.lon, units);
-        const hourlyItems: HourlyItem[] = (raw ?? []).map(
-          (h: {
-            dt: any;
-            dt_txt?: string;
-            main: { temp: any };
-            weather: any;
-            description?: any;
-          }) => {
-            const dt =
-              typeof h?.dt === "number"
-                ? h.dt
-                : Math.floor(Date.parse(h?.dt_txt ?? "") / 1000) ||
-                  Math.floor(Date.now() / 1000);
+          const temp =
+            typeof h?.main?.temp === "number"
+              ? h.main.temp
+              : Number(h?.main?.temp ?? NaN);
 
-            const temp =
-              typeof h?.main?.temp === "number"
-                ? h.main.temp
-                : Number(h?.main?.temp ?? NaN);
+          const w0 = Array.isArray(h?.weather) ? h.weather[0] : h?.weather;
+          const main = String(w0?.main ?? h?.description ?? "");
+          const description = String(w0?.description ?? h?.description ?? main);
 
-            const w0 = Array.isArray(h?.weather) ? h.weather[0] : h?.weather;
-            const main = String(w0?.main ?? h?.description ?? "");
-            const description = String(w0?.description ?? h?.description ?? main);
+          return { dt, temp, main, description };
+        }
+      );
 
-            return { dt, temp, main, description };
-          }
-        );
-        setHourly(hourlyItems);
+      // ── 3) Оставляем ТОЛЬКО ближайшие 24 часа (8 слотов по 3 часа)
+      const now = Math.floor(Date.now() / 1000);
+      const in24h = now + 24 * 3600;
+      const next24h = hourlyItems
+        .filter((h) => Number(h.dt) > now && Number(h.dt) <= in24h)
+        .slice(0, 8);
 
-        const byDay = new Map<string, Day>();
-        hourlyItems.forEach((h: HourlyItem) => {
-          const key = new Date(h.dt * 1000).toDateString();
-          const prev = byDay.get(key);
-          byDay.set(key, {
-            dt: h.dt,
-            main: prev?.main || h.main,
-            min: Math.min(prev?.min ?? Infinity, Number(h.temp)),
-            max: Math.max(prev?.max ?? -Infinity, Number(h.temp)),
-          });
+      setHourly(next24h);
+
+      // ── 4) Дневной прогноз считаем по всем слотам (на 5 дней)
+      const byDay = new Map<string, Day>();
+      hourlyItems.forEach((h: HourlyItem) => {
+        const key = new Date(h.dt * 1000).toDateString();
+        const prev = byDay.get(key);
+        byDay.set(key, {
+          dt: h.dt,
+          main: prev?.main || h.main,
+          min: Math.min(prev?.min ?? Infinity, Number(h.temp)),
+          max: Math.max(prev?.max ?? -Infinity, Number(h.temp)),
         });
-        const days = Array.from(byDay.values())
-          .filter((d) => Number.isFinite(d.min) && Number.isFinite(d.max))
-          .slice(0, 5);
-        setDaily(days);
-      } catch (e: any) {
-        setError(e?.message || "Failed to load weather");
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [coords, units]);
+      });
+
+      const days = Array.from(byDay.values())
+        .filter((d) => Number.isFinite(d.min) && Number.isFinite(d.max))
+        .slice(0, 5);
+
+      setDaily(days);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load weather");
+    } finally {
+      setLoading(false);
+    }
+  })();
+}, [coords, units]);
+
 
   async function handleSearch(q: string) {
     try {
